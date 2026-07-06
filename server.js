@@ -2,9 +2,10 @@ const express = require('express');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs').promises;
-const { v4: uuidv4 } = require('uuid');
+const { randomUUID } = require('crypto');
 const archiver = require('archiver');
 const rateLimit = require('express-rate-limit');
+const { version } = require('./package.json');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -93,6 +94,11 @@ function getProjectFilePath(id) {
 
 // Routes
 
+// App version (single source of truth for the header credit line)
+app.get('/api/version', (req, res) => {
+  res.json({ version });
+});
+
 // Upload floor plan
 app.post('/api/upload', uploadLimiter, upload.single('floorplan'), async (req, res) => {
   try {
@@ -117,7 +123,7 @@ app.use('/uploads', express.static('uploads'));
 app.post('/api/projects/save', projectLimiter, async (req, res) => {
   try {
     const { projectId, projectName, projectData } = req.body;
-    const id = projectId ? validateProjectId(projectId) : uuidv4();
+    const id = projectId ? validateProjectId(projectId) : randomUUID();
     const filepath = getProjectFilePath(id);
     
     const project = {
@@ -216,8 +222,8 @@ function generateIMDFFiles(projectData) {
     anchors = []
   } = projectData;
 
-  const venueId = venue?.id || uuidv4();
-  const buildingId = building?.id || uuidv4();
+  const venueId = venue?.id || randomUUID();
+  const buildingId = building?.id || randomUUID();
 
   // Generate venue.geojson
   const venueFeatures = {
@@ -264,7 +270,7 @@ function generateIMDFFiles(projectData) {
     type: 'FeatureCollection',
     features: levels.map(level => ({
       type: 'Feature',
-      id: level.id || uuidv4(),
+      id: level.id || randomUUID(),
       feature_type: 'level',
       geometry: {
         type: 'Polygon',
@@ -286,7 +292,7 @@ function generateIMDFFiles(projectData) {
     type: 'FeatureCollection',
     features: units.map(unit => ({
       type: 'Feature',
-      id: unit.id || uuidv4(),
+      id: unit.id || randomUUID(),
       feature_type: 'unit',
       geometry: {
         type: 'Polygon',
@@ -309,7 +315,7 @@ function generateIMDFFiles(projectData) {
     type: 'FeatureCollection',
     features: amenities.map(amenity => ({
       type: 'Feature',
-      id: amenity.id || uuidv4(),
+      id: amenity.id || randomUUID(),
       feature_type: 'amenity',
       geometry: {
         type: 'Point',
@@ -331,7 +337,7 @@ function generateIMDFFiles(projectData) {
     type: 'FeatureCollection',
     features: fixtures.map(fixture => ({
       type: 'Feature',
-      id: fixture.id || uuidv4(),
+      id: fixture.id || randomUUID(),
       feature_type: 'fixture',
       geometry: {
         type: fixture.geometryType || 'Point',
@@ -349,7 +355,7 @@ function generateIMDFFiles(projectData) {
     type: 'FeatureCollection',
     features: openings.map(opening => ({
       type: 'Feature',
-      id: opening.id || uuidv4(),
+      id: opening.id || randomUUID(),
       feature_type: 'opening',
       geometry: {
         type: 'LineString',
@@ -369,7 +375,7 @@ function generateIMDFFiles(projectData) {
     type: 'FeatureCollection',
     features: anchors.map(anchor => ({
       type: 'Feature',
-      id: anchor.id || uuidv4(),
+      id: anchor.id || randomUUID(),
       feature_type: 'anchor',
       geometry: {
         type: 'Point',
@@ -416,6 +422,21 @@ function generateIMDFFiles(projectData) {
     'manifest.json': manifest
   };
 }
+
+// Error-handling middleware — ensure API errors return JSON, never an HTML error
+// page (an HTML body is what caused the "JSON.parse: unexpected character" upload
+// failures reported in issue #4).
+app.use((err, req, res, next) => {
+  if (res.headersSent) {
+    return next(err);
+  }
+  // Multer surfaces file-size violations with this code; its filter rejects bad types.
+  if (err.code === 'LIMIT_FILE_SIZE') {
+    return res.status(413).json({ error: 'File too large. Maximum size is 50MB.' });
+  }
+  console.error('Request error:', err.message);
+  res.status(err.status || 500).json({ error: err.message || 'Internal server error' });
+});
 
 // Start server
 ensureDirectories().then(() => {

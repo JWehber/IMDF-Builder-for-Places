@@ -6,9 +6,12 @@ services:
     # Uncomment the line below and comment the image line above to build locally instead
     # build: .
     ports:
-      - "3000:3000"
+      # Change HOST_PORT in .env (or your environment) to avoid conflicts on 3000.
+      - "${HOST_PORT:-3000}:3000"
     volumes:
       - ./projects:/app/projects
       - ./uploads:/app/uploads
     environment:
       - NODE_ENV=production
+      # Set TZ in .env (e.g. Australia/Sydney) to control the container's timezone.
+      - TZ=${TZ:-UTC}

@@ -14,6 +14,7 @@ A user-friendly web application to create Indoor Mapping Data Format (IMDF) file
   - Levels (floors)
 - 💾 **Project Management**: Save and load projects for later editing
 - 📦 **Export**: Generate complete IMDF file packages as ZIP archives
+- 🌓 **Dark Mode**: Toggle in the header; remembers your choice and follows your OS preference
 - 🐳 **Docker Support**: Easy deployment with Docker and Docker Compose
 
 
@@ -47,6 +48,21 @@ The easiest way to run the application is using the pre-built Docker image from 
    ```
 
 **Note**: The pre-built image is automatically updated from the main branch. If you want to build locally instead, edit `docker-compose.yml` and uncomment the `build: .` line.
+
+#### Configuration (optional)
+
+Copy `.env.example` to `.env` (Docker Compose reads it automatically) to change:
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `HOST_PORT` | `3000` | Host port the app is published on — change it if `3000` is already taken. |
+| `TZ` | `UTC` | Container timezone, any IANA name (e.g. `Australia/Sydney`). |
+
+```bash
+cp .env.example .env
+# edit .env, then:
+docker-compose up -d
+```
 
 ### Running Locally (Without Docker)
 
@@ -217,10 +233,12 @@ docker pull ghcr.io/loryanstrant/imdf-builder-for-places:v1.0.0
 ### Issue: Cannot upload floor plan
 - Check file size (max 50MB)
 - Ensure file is PDF, PNG, or JPEG format
+- Both raster images (PNG/JPEG) and PDFs are supported. For a PDF, the **first page** is
+  rendered onto the canvas.
 
 ### Issue: Docker container won't start
 - Ensure Docker Desktop is running
-- Check if port 3000 is available
+- Check if port 3000 is available — or set `HOST_PORT` in `.env` to a free port
 - Try `docker-compose down` and `docker-compose up -d`
 
 ### Issue: Items not appearing on canvas

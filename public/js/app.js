@@ -18,9 +18,63 @@ class IMDFBuilder {
     }
 
     init() {
+        this.initPdfJs();
         this.initCanvas();
         this.attachEventListeners();
         this.updateCounts();
+        this.initTheme();
+        this.loadVersion();
+    }
+
+    async loadVersion() {
+        try {
+            const res = await fetch('/api/version');
+            const { version } = await res.json();
+            const el = document.getElementById('appVersion');
+            if (el && version) el.textContent = `v${version}`;
+        } catch {
+            // Non-fatal: leave the placeholder if the version can't be fetched.
+        }
+    }
+
+    initTheme() {
+        // The inline head script already set data-theme; mirror it into the UI and
+        // wire the toggle. Falls back to OS preference when nothing is stored.
+        const saved = localStorage.getItem('imdf-theme');
+        const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+        this.applyTheme(saved || (prefersDark ? 'dark' : 'light'));
+
+        const toggle = document.getElementById('themeToggle');
+        if (toggle) {
+            toggle.addEventListener('click', () => {
+                const next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+                localStorage.setItem('imdf-theme', next);
+                this.applyTheme(next);
+            });
+        }
+    }
+
+    applyTheme(theme) {
+        const isDark = theme === 'dark';
+        document.documentElement.setAttribute('data-theme', theme);
+
+        const icon = document.querySelector('.theme-toggle-icon');
+        const label = document.querySelector('.theme-toggle-label');
+        if (icon) icon.textContent = isDark ? '☀' : '☾';
+        if (label) label.textContent = isDark ? 'Light' : 'Dark';
+
+        // Keep the Fabric drawing surface in sync with the theme.
+        if (this.canvas) {
+            this.canvas.backgroundColor = isDark ? '#1e1e1e' : '#ffffff';
+            this.canvas.renderAll();
+        }
+    }
+
+    initPdfJs() {
+        // pdf.js runs its parser in a web worker; point it at the vendored copy.
+        if (window.pdfjsLib) {
+            pdfjsLib.GlobalWorkerOptions.workerSrc = '/lib/pdf.worker.min.js';
+        }
     }
 
     initCanvas() {
@@ -410,48 +464,77 @@ class IMDFBuilder {
                 body: formData
             });
 
-            const result = await response.json();
-            
-            if (result.success) {
+            const result = await this.parseJsonResponse(response);
+
+            if (response.ok && result.success) {
                 this.floorplanImage = result.path;
                 await this.loadFloorplanToCanvas(result.path);
                 alert('Floor plan uploaded successfully!');
             } else {
-                alert('Upload failed: ' + result.error);
+                alert('Upload failed: ' + (result.error || `HTTP ${response.status}`));
             }
         } catch (error) {
             alert('Upload error: ' + error.message);
         }
     }
 
-    async loadFloorplanToCanvas(imagePath) {
-        return new Promise((resolve, reject) => {
-            fabric.Image.fromURL(imagePath, (img) => {
-                if (!img) {
-                    reject(new Error('Failed to load image'));
-                    return;
-                }
+    // Parse a fetch response as JSON, tolerating a non-JSON body (e.g. an HTML error
+    // page from a proxy or a crashed server) instead of throwing the confusing
+    // "JSON.parse: unexpected character" error users reported in issue #4.
+    async parseJsonResponse(response) {
+        const text = await response.text();
+        try {
+            return text ? JSON.parse(text) : {};
+        } catch {
+            return { error: `Server returned a non-JSON response (HTTP ${response.status})` };
+        }
+    }
 
-                // Scale image to fit canvas
-                const scale = Math.min(
-                    this.canvas.width / img.width,
-                    this.canvas.height / img.height
-                ) * 0.9;
+    async loadFloorplanToCanvas(imageUrl) {
+        // A PDF can't be drawn as an <img>; rasterize its first page first (issue #4).
+        const isPdf = /\.pdf($|\?)/i.test(imageUrl);
+        const sourceUrl = isPdf ? await this.renderPdfToDataUrl(imageUrl) : imageUrl;
 
-                img.scale(scale);
-                img.set({
-                    left: this.canvas.width / 2,
-                    top: this.canvas.height / 2,
-                    originX: 'center',
-                    originY: 'center',
-                    selectable: false,
-                    evented: false
-                });
+        // Fabric v6 returns a Promise from fromURL (the old callback form is gone).
+        const img = await fabric.Image.fromURL(sourceUrl);
+        if (!img) {
+            throw new Error('Failed to load floor plan image');
+        }
 
-                this.canvas.setBackgroundImage(img, this.canvas.renderAll.bind(this.canvas));
-                resolve();
-            });
+        // Scale image to fit canvas
+        const scale = Math.min(
+            this.canvas.width / img.width,
+            this.canvas.height / img.height
+        ) * 0.9;
+
+        img.scale(scale);
+        img.set({
+            left: this.canvas.width / 2,
+            top: this.canvas.height / 2,
+            originX: 'center',
+            originY: 'center',
+            selectable: false,
+            evented: false
         });
+
+        // Fabric v6: backgroundImage is a property; setBackgroundImage() was removed.
+        this.canvas.backgroundImage = img;
+        this.canvas.renderAll();
+    }
+
+    async renderPdfToDataUrl(pdfUrl) {
+        if (!window.pdfjsLib) {
+            throw new Error('PDF support failed to load. Please refresh and try again.');
+        }
+        const pdf = await pdfjsLib.getDocument(pdfUrl).promise;
+        const page = await pdf.getPage(1); // first page becomes the floor plan
+        // Render at 2x so the background stays crisp when zoomed in.
+        const viewport = page.getViewport({ scale: 2 });
+        const tmpCanvas = document.createElement('canvas');
+        tmpCanvas.width = viewport.width;
+        tmpCanvas.height = viewport.height;
+        await page.render({ canvasContext: tmpCanvas.getContext('2d'), viewport }).promise;
+        return tmpCanvas.toDataURL('image/png');
     }
 
     zoomIn() {
